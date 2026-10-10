@@ -4,7 +4,7 @@
         {
             "name": "code-formatter",
             "source": "./code-formatter",
-            "version": "0.1.1",
+            "version": "0.1.2",
             "description": "Auto-formats code files right after the AI writes or edits them: unified layout (4-space indent, double quotes, semicolons, no width-based wrapping) for Vue/JS/TS/HTML/CSS/JSON/Markdown/YAML plus Java/PHP/SQL/Shell/TOML/Python/Go/C/C++; syncs prettier.* settings from VS Code/Cursor/Trae and respects the project's own .prettierrc",
             "displayName": "Code Formatter",
             "displayName_i18n": {
@@ -14,7 +14,14 @@
                 "zh-CN": "AI 写入/编辑代码文件后自动原地格式化：4 空格缩进、双引号、分号、不限行宽；自动同步 VS Code/Cursor/Trae 的 prettier 配置；支持 Vue/JS/TS/HTML/CSS/JSON/MD/YAML/Java/PHP/SQL/Shell/TOML/Python/Go/C/C++；项目 .prettierrc 优先"
             },
             "category": "developer-tools",
-            "keywords": ["formatter", "prettier", "code-style", "vue", "react", "format"],
+            "keywords": [
+                "formatter",
+                "prettier",
+                "code-style",
+                "vue",
+                "react",
+                "format"
+            ],
             "icon": "https://cdn.jsdelivr.net/gh/tubiaoku316/wall-format-plugins@main/icon.png"
         }
     ]

@@ -11,7 +11,7 @@
  * - 项目里有 .prettierrc 时完全按项目的来；否则用插件自带 defaults.json
  */
 import { readFileSync, writeFileSync, statSync, existsSync, renameSync, unlinkSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -31,25 +31,17 @@ killSwitch.unref?.();
 /* ------------------------------------------------------------------ */
 
 // Prettier 内置 parser 的扩展名（parser 由 prettier 按 filepath 自动推断）
-const PRETTIER_BUILTIN_EXTS = new Set([
-  ".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx",
-  ".vue", ".html", ".htm",
-  ".css", ".scss", ".sass", ".less",
-  ".json", ".jsonc", ".json5",
-  ".md", ".markdown", ".mdx",
-  ".yaml", ".yml",
-  ".graphql", ".gql",
-]);
+const PRETTIER_BUILTIN_EXTS = new Set([".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx", ".vue", ".html", ".htm", ".css", ".scss", ".sass", ".less", ".json", ".jsonc", ".json5", ".md", ".markdown", ".mdx", ".yaml", ".yml", ".graphql", ".gql"]);
 
 // 需要 Prettier 插件的扩展名
 const PRETTIER_PLUGIN_PKG = {
-  ".java": "prettier-plugin-java",
-  ".php": "@prettier/plugin-php",
-  ".sql": "prettier-plugin-sql",
-  ".sh": "prettier-plugin-sh",
-  ".bash": "prettier-plugin-sh",
-  ".zsh": "prettier-plugin-sh",
-  ".toml": "prettier-plugin-toml",
+    ".java": "prettier-plugin-java",
+    ".php": "@prettier/plugin-php",
+    ".sql": "prettier-plugin-sql",
+    ".sh": "prettier-plugin-sh",
+    ".bash": "prettier-plugin-sh",
+    ".zsh": "prettier-plugin-sh",
+    ".toml": "prettier-plugin-toml",
 };
 
 const GOFMT_EXTS = new Set([".go"]);
@@ -63,13 +55,13 @@ const SKIP_FILE_RE = /(^|[\\/])(package-lock\.json|npm-shrinkwrap\.json|pnpm-loc
 const SKIP_SUFFIX_RE = /(\.min\.(js|mjs|cjs|css)$|\.d\.ts$|\.lock$)/i;
 
 function shouldSkip(file) {
-  if (SKIP_DIR_RE.test(file) || SKIP_FILE_RE.test(file) || SKIP_SUFFIX_RE.test(file)) return true;
-  try {
-    if (statSync(file).size > MAX_FILE_BYTES) return true;
-  } catch {
-    return true;
-  }
-  return false;
+    if (SKIP_DIR_RE.test(file) || SKIP_FILE_RE.test(file) || SKIP_SUFFIX_RE.test(file)) return true;
+    try {
+        if (statSync(file).size > MAX_FILE_BYTES) return true;
+    } catch {
+        return true;
+    }
+    return false;
 }
 
 /* ------------------------------------------------------------------ */
@@ -78,160 +70,163 @@ function shouldSkip(file) {
 
 let prettierModule = null;
 async function loadPrettier() {
-  if (prettierModule) return prettierModule;
-  try {
-    prettierModule = await import("prettier");
-  } catch {
+    if (prettierModule) return prettierModule;
+    try {
+        prettierModule = await import("prettier");
+        return prettierModule;
+    } catch {
+        /* 依赖缺失，走下面的后台补装 */
+    }
     await ensureDeps();
-    prettierModule = await import("prettier");
-  }
-  return prettierModule;
+    try {
+        prettierModule = await import("prettier");
+    } catch {
+        // 安装已在后台进行但还没完成（或失败），本轮先跳过
+        throw new Error("DEPS_INSTALLING");
+    }
+    return prettierModule;
 }
 
-/** 依赖意外缺失时（安装副本不带 node_modules）做一次自动补装 */
+/** 依赖意外缺失时（Git 安装的副本不带 node_modules）触发一次后台补装，不阻塞本轮 */
 let depsEnsured = false;
 async function ensureDeps() {
-  if (depsEnsured) return;
-  depsEnsured = true;
-  const marker = path.join(PLUGIN_ROOT, ".deps-installed");
-  if (existsSync(marker)) return;
-  spawnSync("npm", ["install", "--omit=dev", "--no-audit", "--no-fund", "--loglevel=error"], {
-    cwd: PLUGIN_ROOT,
-    timeout: 90_000,
-    stdio: "ignore",
-    windowsHide: true,
-    shell: process.platform === "win32",
-  });
-  try {
-    writeFileSync(marker, String(Date.now()));
-  } catch {
-    /* 只读环境就算了 */
-  }
+    if (depsEnsured) return;
+    depsEnsured = true;
+    const marker = path.join(PLUGIN_ROOT, ".deps-installed");
+    if (existsSync(marker)) return;
+    const lock = path.join(PLUGIN_ROOT, ".deps-installing");
+    // 新鲜的锁（15 分钟内）说明另一个进程正在装，本轮直接跳过
+    try {
+        if (existsSync(lock) && Date.now() - statSync(lock).mtimeMs < 15 * 60_000) return;
+        writeFileSync(lock, String(Date.now()));
+    } catch {
+        return;
+    }
+    // 在独立后台进程中安装：hook 本轮立即退出，安装继续进行
+    try {
+        const child = spawn(process.execPath, [path.join(import.meta.dirname, "install-deps.mjs")], {
+            detached: true,
+            stdio: "ignore",
+            windowsHide: true,
+        });
+        child.unref();
+    } catch {
+        try {
+            unlinkSync(lock);
+        } catch {
+            /* ignore */
+        }
+    }
 }
 
 /** 把插件的多种导出形态统一成 prettier 认识的 plugin 对象 */
 function pickPluginModule(mod) {
-  if (mod?.parsers) return mod;
-  if (mod?.default?.parsers) return mod.default;
-  return null;
+    if (mod?.parsers) return mod;
+    if (mod?.default?.parsers) return mod.default;
+    return null;
 }
 
 async function formatWithPrettier(file, source) {
-  const prettier = await loadPrettier();
-  const ext = path.extname(file).toLowerCase();
-  const plugins = [];
-  const pkg = PRETTIER_PLUGIN_PKG[ext];
-  if (pkg) {
-    const mod = pickPluginModule(await import(pkg));
-    if (!mod) throw new Error(`plugin ${pkg} loaded but has no parsers`);
-    plugins.push(mod);
-  }
+    const prettier = await loadPrettier();
+    const ext = path.extname(file).toLowerCase();
+    const plugins = [];
+    const pkg = PRETTIER_PLUGIN_PKG[ext];
+    if (pkg) {
+        const mod = pickPluginModule(await import(pkg));
+        if (!mod) throw new Error(`plugin ${pkg} loaded but has no parsers`);
+        plugins.push(mod);
+    }
 
-  // 优先级（对齐 prettier-vscode 的行为）：项目 .prettierrc > 编辑器 settings.json 的 prettier.* > 插件 defaults.json
-  let options = { ...DEFAULTS, ...loadEditorPrettierSettings() };
-  try {
-    const config = await prettier.resolveConfig(file);
-    if (config && Object.keys(config).length > 0) options = { ...options, ...config };
-  } catch {
-    /* 配置文件解析失败就当没有 */
-  }
-  // prettier-plugin-toml（tombi 引擎）printWidth 超过 255 会解析失败
-  if (ext === ".toml" && options.printWidth > 255) options = { ...options, printWidth: 255 };
+    // 优先级（对齐 prettier-vscode 的行为）：项目 .prettierrc > 编辑器 settings.json 的 prettier.* > 插件 defaults.json
+    let options = { ...DEFAULTS, ...loadEditorPrettierSettings() };
+    try {
+        const config = await prettier.resolveConfig(file);
+        if (config && Object.keys(config).length > 0) options = { ...options, ...config };
+    } catch {
+        /* 配置文件解析失败就当没有 */
+    }
+    // prettier-plugin-toml（tombi 引擎）printWidth 超过 255 会解析失败
+    if (ext === ".toml" && options.printWidth > 255) options = { ...options, printWidth: 255 };
 
-  return prettier.format(source, { ...options, filepath: file, plugins });
+    return prettier.format(source, { ...options, filepath: file, plugins });
 }
 
 /* ------------------------------------------------------------------ */
 /* 读取 VS Code / Cursor / Trae 等编辑器 settings.json 里的 prettier.* 配置 */
 /* ------------------------------------------------------------------ */
 
-const EDITOR_OPTION_KEYS = new Set([
-  "printWidth", "tabWidth", "useTabs", "semi", "singleQuote", "jsxSingleQuote",
-  "quoteProps", "trailingComma", "bracketSpacing", "bracketSameLine", "arrowParens",
-  "proseWrap", "htmlWhitespaceSensitivity", "vueIndentScriptAndStyle",
-  "singleAttributePerLine", "endOfLine", "objectWrap",
-]);
+const EDITOR_OPTION_KEYS = new Set(["printWidth", "tabWidth", "useTabs", "semi", "singleQuote", "jsxSingleQuote", "quoteProps", "trailingComma", "bracketSpacing", "bracketSameLine", "arrowParens", "proseWrap", "htmlWhitespaceSensitivity", "vueIndentScriptAndStyle", "singleAttributePerLine", "endOfLine", "objectWrap"]);
 
 let editorSettingsCache;
 
 function loadEditorPrettierSettings() {
-  if (editorSettingsCache !== undefined) return editorSettingsCache;
-  editorSettingsCache = {};
-  const appData = process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
-  const base =
-    process.platform === "win32"
-      ? appData
-      : process.platform === "darwin"
-        ? path.join(os.homedir(), "Library", "Application Support")
-        : path.join(os.homedir(), ".config");
-  // 依次找 VS Code 系编辑器，用第一个配置了 prettier.* 的
-  for (const dir of ["Code", "Code - Insiders", "Cursor", "Trae", "Trae CN", "Windsurf", "VSCodium"]) {
-    const settingsPath = path.join(base, dir, "User", "settings.json");
-    try {
-      if (!existsSync(settingsPath)) continue;
-      const parsed = JSON.parse(stripJsonc(readFileSync(settingsPath, "utf8")));
-      for (const [key, value] of Object.entries(parsed)) {
-        if (
-          key.startsWith("prettier.") &&
-          EDITOR_OPTION_KEYS.has(key.slice(9)) &&
-          typeof value !== "object" &&
-          value !== null
-        ) {
-          editorSettingsCache[key.slice(9)] = value;
+    if (editorSettingsCache !== undefined) return editorSettingsCache;
+    editorSettingsCache = {};
+    const appData = process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
+    const base = process.platform === "win32" ? appData : process.platform === "darwin" ? path.join(os.homedir(), "Library", "Application Support") : path.join(os.homedir(), ".config");
+    // 依次找 VS Code 系编辑器，用第一个配置了 prettier.* 的
+    for (const dir of ["Code", "Code - Insiders", "Cursor", "Trae", "Trae CN", "Windsurf", "VSCodium"]) {
+        const settingsPath = path.join(base, dir, "User", "settings.json");
+        try {
+            if (!existsSync(settingsPath)) continue;
+            const parsed = JSON.parse(stripJsonc(readFileSync(settingsPath, "utf8")));
+            for (const [key, value] of Object.entries(parsed)) {
+                if (key.startsWith("prettier.") && EDITOR_OPTION_KEYS.has(key.slice(9)) && typeof value !== "object" && value !== null) {
+                    editorSettingsCache[key.slice(9)] = value;
+                }
+            }
+            if (Object.keys(editorSettingsCache).length > 0) break;
+        } catch {
+            /* 读不了就换下一个编辑器 */
         }
-      }
-      if (Object.keys(editorSettingsCache).length > 0) break;
-    } catch {
-      /* 读不了就换下一个编辑器 */
     }
-  }
-  return editorSettingsCache;
+    return editorSettingsCache;
 }
 
 /** VS Code 的 settings.json 是 JSONC（带注释和尾逗号），先转成纯 JSON */
 function stripJsonc(src) {
-  let out = "";
-  let i = 0;
-  const n = src.length;
-  let inStr = false;
-  while (i < n) {
-    const c = src[i];
-    if (inStr) {
-      out += c;
-      if (c === "\\") {
-        out += src[i + 1] ?? "";
-        i += 2;
-        continue;
-      }
-      if (c === '"') inStr = false;
-      i++;
-      continue;
+    let out = "";
+    let i = 0;
+    const n = src.length;
+    let inStr = false;
+    while (i < n) {
+        const c = src[i];
+        if (inStr) {
+            out += c;
+            if (c === "\\") {
+                out += src[i + 1] ?? "";
+                i += 2;
+                continue;
+            }
+            if (c === '"') inStr = false;
+            i++;
+            continue;
+        }
+        if (c === '"') {
+            inStr = true;
+            out += c;
+            i++;
+            continue;
+        }
+        if (c === "/" && src[i + 1] === "/") {
+            while (i < n && src[i] !== "\n") i++;
+            continue;
+        }
+        if (c === "/" && src[i + 1] === "*") {
+            i += 2;
+            while (i < n && !(src[i] === "*" && src[i + 1] === "/")) i++;
+            i += 2;
+            continue;
+        }
+        out += c;
+        i++;
     }
-    if (c === '"') {
-      inStr = true;
-      out += c;
-      i++;
-      continue;
-    }
-    if (c === "/" && src[i + 1] === "/") {
-      while (i < n && src[i] !== "\n") i++;
-      continue;
-    }
-    if (c === "/" && src[i + 1] === "*") {
-      i += 2;
-      while (i < n && !(src[i] === "*" && src[i + 1] === "/")) i++;
-      i += 2;
-      continue;
-    }
-    out += c;
-    i++;
-  }
-  return out.replace(/,(\s*[}\]])/g, "$1");
+    return out.replace(/,(\s*[}\]])/g, "$1");
 }
 
 async function formatWithGofmt(source) {
-  const mod = await import("@wasm-fmt/gofmt");
-  return mod.format(source);
+    const mod = await import("@wasm-fmt/gofmt");
+    return mod.format(source);
 }
 
 // clang-format 的 ColumnLimit 用 0 表示不限宽；ruff 的 line-length 上限 65535
@@ -241,67 +236,66 @@ const RUFF_LINE_LENGTH = Math.min(Math.max(DEFAULTS.printWidth, 1), 65535);
 const CLANG_INLINE_STYLE = `{ BasedOnStyle: Google, ColumnLimit: ${CLANG_COLUMN_LIMIT}, IndentWidth: ${DEFAULTS.tabWidth}, AccessModifierOffset: -${DEFAULTS.tabWidth}, DerivePointerAlignment: false, PointerAlignment: Left }`;
 
 async function formatWithClang(file, source) {
-  const mod = await import("@wasm-fmt/clang-format");
-  // 项目里有 .clang-format / _clang-format 时用项目风格，否则用与全局预设一致的内置风格
-  let style = CLANG_INLINE_STYLE;
-  for (let dir = path.dirname(file); ; dir = path.dirname(dir)) {
-    for (const name of [".clang-format", "_clang-format"]) {
-      const candidate = path.join(dir, name);
-      if (existsSync(candidate)) {
-        style = readFileSync(candidate, "utf8");
-        break;
-      }
+    const mod = await import("@wasm-fmt/clang-format");
+    // 项目里有 .clang-format / _clang-format 时用项目风格，否则用与全局预设一致的内置风格
+    let style = CLANG_INLINE_STYLE;
+    for (let dir = path.dirname(file); ; dir = path.dirname(dir)) {
+        for (const name of [".clang-format", "_clang-format"]) {
+            const candidate = path.join(dir, name);
+            if (existsSync(candidate)) {
+                style = readFileSync(candidate, "utf8");
+                break;
+            }
+        }
+        if (style !== CLANG_INLINE_STYLE || dir === path.parse(dir).root) break;
     }
-    if (style !== CLANG_INLINE_STYLE || dir === path.parse(dir).root) break;
-  }
-  return mod.format(source, path.basename(file), style);
+    return mod.format(source, path.basename(file), style);
 }
 
 async function formatWithRuff(source) {
-  const mod = await import("@astral-sh/ruff-wasm-nodejs");
-  const workspace = new mod.Workspace(
-    {
-      "line-length": RUFF_LINE_LENGTH,
-      "indent-width": DEFAULTS.tabWidth,
-      format: { "indent-style": "space", "quote-style": DEFAULTS.singleQuote === false ? "double" : "single" },
-    },
-    mod.PositionEncoding.Utf16,
-  );
-  try {
-    return workspace.format(source);
-  } finally {
+    const mod = await import("@astral-sh/ruff-wasm-nodejs");
+    const workspace = new mod.Workspace(
+        {
+            "line-length": RUFF_LINE_LENGTH,
+            "indent-width": DEFAULTS.tabWidth,
+            format: { "indent-style": "space", "quote-style": DEFAULTS.singleQuote === false ? "double" : "single" },
+        },
+        mod.PositionEncoding.Utf16,
+    );
     try {
-      workspace.free();
-    } catch {
-      /* already freed */
+        return workspace.format(source);
+    } finally {
+        try {
+            workspace.free();
+        } catch {
+            /* already freed */
+        }
     }
-  }
 }
 
 /** Rust 无 WASM 方案：机器上装有 rustfmt 才能用 */
 function formatWithNativeRustfmt(source) {
-  const bin = process.platform === "win32" ? "rustfmt.exe" : "rustfmt";
-  const probe = spawnSync(bin, ["--version"], { timeout: 5_000, windowsHide: true });
-  if (probe.error || probe.status !== 0) return null;
-  const res = spawnSync(bin, ["--emit", "stdout", "--edition", "2021"], {
-    input: source,
-    encoding: "utf8",
-    timeout: 15_000,
-    windowsHide: true,
-    maxBuffer: 64 * 1024 * 1024,
-  });
-  return res.status === 0 ? res.stdout : null;
+    const bin = process.platform === "win32" ? "rustfmt.exe" : "rustfmt";
+    const probe = spawnSync(bin, ["--version"], { timeout: 5_000, windowsHide: true });
+    if (probe.error || probe.status !== 0) return null;
+    const res = spawnSync(bin, ["--emit", "stdout", "--edition", "2021"], {
+        input: source,
+        encoding: "utf8",
+        timeout: 15_000,
+        windowsHide: true,
+        maxBuffer: 64 * 1024 * 1024,
+    });
+    return res.status === 0 ? res.stdout : null;
 }
 
 function engineFor(file) {
-  const ext = path.extname(file).toLowerCase();
-  if (PRETTIER_BUILTIN_EXTS.has(ext) || PRETTIER_PLUGIN_PKG[ext])
-    return { name: "prettier", run: (src) => formatWithPrettier(file, src) };
-  if (GOFMT_EXTS.has(ext)) return { name: "gofmt", run: (src) => formatWithGofmt(src) };
-  if (CLANG_FORMAT_EXTS.has(ext)) return { name: "clang-format", run: (src) => formatWithClang(file, src) };
-  if (RUFF_EXTS.has(ext)) return { name: "ruff", run: (src) => formatWithRuff(src) };
-  if (RUSTFMT_EXTS.has(ext)) return { name: "rustfmt", run: (src) => formatWithNativeRustfmt(src) };
-  return null;
+    const ext = path.extname(file).toLowerCase();
+    if (PRETTIER_BUILTIN_EXTS.has(ext) || PRETTIER_PLUGIN_PKG[ext]) return { name: "prettier", run: (src) => formatWithPrettier(file, src) };
+    if (GOFMT_EXTS.has(ext)) return { name: "gofmt", run: (src) => formatWithGofmt(src) };
+    if (CLANG_FORMAT_EXTS.has(ext)) return { name: "clang-format", run: (src) => formatWithClang(file, src) };
+    if (RUFF_EXTS.has(ext)) return { name: "ruff", run: (src) => formatWithRuff(src) };
+    if (RUSTFMT_EXTS.has(ext)) return { name: "rustfmt", run: (src) => formatWithNativeRustfmt(src) };
+    return null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -309,83 +303,93 @@ function engineFor(file) {
 /* ------------------------------------------------------------------ */
 
 function readStdinPayload() {
-  if (process.stdin.isTTY) return null;
-  try {
-    return JSON.parse(readFileSync(0, "utf8"));
-  } catch {
-    return null;
-  }
+    if (process.stdin.isTTY) return null;
+    try {
+        return JSON.parse(readFileSync(0, "utf8"));
+    } catch {
+        return null;
+    }
 }
 
 function writeAtomic(file, content) {
-  const tmp = `${file}.cf-tmp-${process.pid}`;
-  writeFileSync(tmp, content);
-  try {
-    renameSync(tmp, file);
-  } catch (err) {
+    const tmp = `${file}.cf-tmp-${process.pid}`;
+    writeFileSync(tmp, content);
     try {
-      unlinkSync(tmp);
-    } catch {
-      /* ignore */
+        renameSync(tmp, file);
+    } catch (err) {
+        try {
+            unlinkSync(tmp);
+        } catch {
+            /* ignore */
+        }
+        throw err;
     }
-    throw err;
-  }
 }
 
 function emit(payload) {
-  try {
-    process.stdout.write(JSON.stringify(payload));
-  } catch {
-    /* ignore */
-  }
+    try {
+        process.stdout.write(JSON.stringify(payload));
+    } catch {
+        /* ignore */
+    }
 }
 
 async function main() {
-  const payload = readStdinPayload();
-  if (!payload) return;
+    const payload = readStdinPayload();
+    if (!payload) return;
 
-  const input = payload.tool_input || {};
-  const rawPath = input.file_path || input.notebook_path || (payload.tool_response && payload.tool_response.filePath);
-  if (!rawPath || typeof rawPath !== "string") return;
+    const input = payload.tool_input || {};
+    const rawPath = input.file_path || input.notebook_path || (payload.tool_response && payload.tool_response.filePath);
+    if (!rawPath || typeof rawPath !== "string") return;
 
-  const cwd = typeof payload.cwd === "string" && payload.cwd ? payload.cwd : process.cwd();
-  const file = path.isAbsolute(rawPath) ? rawPath : path.resolve(cwd, rawPath);
-  if (shouldSkip(file)) return;
+    const cwd = typeof payload.cwd === "string" && payload.cwd ? payload.cwd : process.cwd();
+    const file = path.isAbsolute(rawPath) ? rawPath : path.resolve(cwd, rawPath);
+    if (shouldSkip(file)) return;
 
-  const engine = engineFor(file);
-  if (!engine) return;
+    const engine = engineFor(file);
+    if (!engine) return;
 
-  let source = readFileSync(file, "utf8");
-  const hadBom = source.charCodeAt(0) === 0xfeff;
-  if (hadBom) source = source.slice(1);
-  if (source.trim() === "") return;
+    let source = readFileSync(file, "utf8");
+    const hadBom = source.charCodeAt(0) === 0xfeff;
+    if (hadBom) source = source.slice(1);
+    if (source.trim() === "") return;
 
-  const formatted = await engine.run(source);
-  if (typeof formatted !== "string" || formatted === source) return;
+    const formatted = await engine.run(source);
+    if (typeof formatted !== "string" || formatted === source) return;
 
-  let output = formatted;
-  if (hadBom && !output.startsWith(BOM)) output = BOM + output;
+    let output = formatted;
+    if (hadBom && !output.startsWith(BOM)) output = BOM + output;
 
-  writeAtomic(file, output);
-  emit({
-    hookSpecificOutput: {
-      hookEventName: "PostToolUse",
-      additionalContext: `code-formatter: 已自动格式化 ${path.basename(file)}（${engine.name}）。若接下来 Edit 的 old_string 因排版变化而匹配失败，请先重新读取该文件。`,
-    },
-  });
+    writeAtomic(file, output);
+    emit({
+        hookSpecificOutput: {
+            hookEventName: "PostToolUse",
+            additionalContext: `code-formatter: 已自动格式化 ${path.basename(file)}（${engine.name}）。若接下来 Edit 的 old_string 因排版变化而匹配失败，请先重新读取该文件。`,
+        },
+    });
 }
 
 export { loadEditorPrettierSettings, stripJsonc };
 
 // 只有直接运行（作为 hook）时才走主流程；被测试脚本 import 时只提供函数
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main()
-    .catch((err) => {
-      try {
-        process.stderr.write(`code-formatter: skipped (${(err && err.message) || err})\n`);
-      } catch {
-        /* ignore */
-      }
-    })
-    .finally(() => process.exit(0));
+    main()
+        .catch((err) => {
+            const msg = (err && err.message) || String(err);
+            if (msg === "DEPS_INSTALLING") {
+                emit({
+                    hookSpecificOutput: {
+                        hookEventName: "PostToolUse",
+                        additionalContext: "code-formatter: 格式化引擎依赖正在后台安装（首次约 1~3 分钟，自动完成），本轮暂未格式化该文件；安装完成后新的编辑会自动格式化。",
+                    },
+                });
+                return;
+            }
+            try {
+                process.stderr.write(`code-formatter: skipped (${msg})\n`);
+            } catch {
+                /* ignore */
+            }
+        })
+        .finally(() => process.exit(0));
 }
