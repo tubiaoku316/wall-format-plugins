@@ -15,7 +15,7 @@
             },
             "category": "developer-tools",
             "keywords": ["formatter", "prettier", "code-style", "vue", "react", "format"],
-            "icon": "./icon.png"
+            "icon": "https://cdn.jsdelivr.net/gh/tubiaoku316/wall-format-plugins@main/icon.png"
         }
     ]
 }
