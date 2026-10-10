@@ -1,0 +1,9 @@
+{
+    "name": "code-formatter",
+    "version": "0.1.1",
+    "description": "Auto-formats code files right after the AI writes or edits them: unified layout (4-space indent, double quotes, semicolons, no width-based wrapping) for Vue/JS/TS/HTML/CSS/JSON/Markdown/YAML plus Java/PHP/SQL/Shell/TOML/Python/Go/C/C++; syncs prettier.* settings from VS Code/Cursor/Trae and respects the project's own .prettierrc",
+    "author": {
+        "name": "自动格式化"
+    },
+    "hooks": "./hooks/hooks.json"
+}

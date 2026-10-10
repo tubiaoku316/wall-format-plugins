@@ -1,0 +1,18 @@
+{
+  "name": "code-formatter-engine",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Formatter engine dependencies for the code-formatter plugin (bundled, not published)",
+  "dependencies": {
+    "@astral-sh/ruff-wasm-nodejs": "^0.17.0",
+    "@prettier/plugin-php": "^0.25.0",
+    "@wasm-fmt/clang-format": "^23.1.1",
+    "@wasm-fmt/gofmt": "^0.7.3",
+    "prettier": "^3.9.9",
+    "prettier-plugin-java": "^2.11.0",
+    "prettier-plugin-sh": "^0.20.2",
+    "prettier-plugin-sql": "^0.20.0",
+    "prettier-plugin-toml": "^3.0.2"
+  }
+}
